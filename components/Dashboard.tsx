@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { ProcessedData, RentalRecord, MonthlyAggregation } from '../types';
+import { ProcessedData, MonthlyAggregation } from '../types';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
-import { ArrowLeft, Table, TrendingUp, Calendar, Sparkles, Euro, Filter, ChevronDown, Check } from 'lucide-react';
+import { ArrowLeft, Table, TrendingUp, Calendar, Sparkles, Euro, ChevronDown, Check } from 'lucide-react';
 import { generateDataInsights } from '../services/geminiService';
 import ReactMarkdown from 'react-markdown';
 
@@ -16,7 +16,6 @@ type DateRangeType = 'All' | '1-10' | '11-20' | '21-End';
 
 export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
   const [selectedStation, setSelectedStation] = useState<string>('All');
-  // Changed to array for multi-select
   const [selectedGroups, setSelectedGroups] = useState<string[]>(['All']);
   const [isGroupDropdownOpen, setIsGroupDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -27,7 +26,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -38,12 +36,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Reset selected groups when station changes
   useEffect(() => {
     setSelectedGroups(['All']);
   }, [selectedStation]);
 
-  // Derive available groups based on selected station
   const availableGroups = useMemo(() => {
     if (selectedStation === 'All') {
       return data.groups;
@@ -57,12 +53,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
     return Array.from(groupsInStation).sort();
   }, [data.records, data.groups, selectedStation]);
 
-  // 1. Filter Records based on selection
   const filteredRecords = useMemo(() => {
     return data.records.filter(r => {
       const stationMatch = selectedStation === 'All' || r.station === selectedStation;
-      
-      // Multi-select logic: 'All' matches everything, otherwise check if group is in selected list
       const groupMatch = selectedGroups.includes('All') || selectedGroups.includes(r.group);
       
       let dateMatch = true;
@@ -74,13 +67,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
     });
   }, [data.records, selectedStation, selectedGroups, selectedDateRange]);
 
-  // 2. Aggregate Data by Month for Chart/Table
   const aggregatedData = useMemo(() => {
     const map = new Map<string, MonthlyAggregation>();
 
-    // Initialize all months to 0 to ensure continuity in charts
     data.months.forEach(mKey => {
-      // Find a record with this monthKey to get the correct displayDate, or reconstruct it
       const displayDate = new Date(parseInt(mKey.split('-')[0]), parseInt(mKey.split('-')[1]) - 1).toLocaleString('default', { month: 'short', year: 'numeric' });
       
       map.set(mKey, {
@@ -93,7 +83,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
       });
     });
 
-    // Sum up filtered records
     filteredRecords.forEach(r => {
       const entry = map.get(r.monthKey);
       if (entry) {
@@ -103,7 +92,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
       }
     });
 
-    // Calculate Averages
     const result = Array.from(map.values()).map(item => ({
       ...item,
       avgRate: item.totalDays > 0 ? item.totalRevenue / item.totalDays : 0
@@ -112,7 +100,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
     return result.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
   }, [filteredRecords, data.months]);
 
-  // 3. Global Metrics for the current view
   const currentViewMetrics = useMemo(() => {
     const totalRev = filteredRecords.reduce((acc, r) => acc + r.charge, 0);
     const totalDays = filteredRecords.reduce((acc, r) => acc + r.days, 0);
@@ -122,7 +109,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
 
   const handleGenerateInsights = async () => {
     setIsGeneratingAi(true);
-    // Pass the currently viewed aggregation to the AI
     const groupLabel = selectedGroups.includes('All') 
       ? 'All Groups' 
       : selectedGroups.join(', ');
@@ -140,8 +126,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
     }
 
     let newSelection = [...selectedGroups];
-    
-    // If 'All' was selected, clear it and start fresh with the new group
     if (newSelection.includes('All')) {
       newSelection = [grp];
     } else {
@@ -151,18 +135,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
         newSelection.push(grp);
       }
     }
-
-    // If nothing selected, revert to 'All'
     if (newSelection.length === 0) {
       newSelection = ['All'];
     }
-
     setSelectedGroups(newSelection);
   };
 
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
-      {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -188,12 +168,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-        
-        {/* Filters Bar */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-center">
           <div className="flex flex-col md:flex-row gap-4 w-full md:w-auto">
             
-            {/* Station Filter */}
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Station</label>
               <select 
@@ -206,7 +183,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
               </select>
             </div>
 
-            {/* Group Filter (Multi-Select) */}
             <div className="flex flex-col gap-1 relative" ref={dropdownRef}>
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Car Group</label>
               <button 
@@ -250,16 +226,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
                       </div>
                     );
                   })}
-                  {availableGroups.length === 0 && (
-                     <div className="p-4 text-center text-xs text-slate-400">
-                       No groups available for this station.
-                     </div>
-                  )}
                 </div>
               )}
             </div>
 
-             {/* Date Range Filter */}
              <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Month Period</label>
               <select 
@@ -276,7 +246,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
 
           </div>
 
-          {/* View Mode Toggles */}
           <div className="flex bg-slate-100 rounded-lg p-1 self-end md:self-center">
             <button
               onClick={() => setViewMode('chart')}
@@ -295,10 +264,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
           </div>
         </div>
 
-        {/* Content Area */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* Main Visualization (2/3 width) */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
               <div className="flex items-center justify-between mb-6">
@@ -337,7 +303,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
                       <Tooltip 
                         cursor={{ fill: '#f8fafc' }}
                         contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                        formatter={(value: number) => [`€${value.toFixed(2)}`, 'Avg Daily Rate']}
+                        formatter={(value?: number) => [`€${(value ?? 0).toFixed(2)}`, 'Avg Daily Rate']}
                       />
                       <Bar 
                         dataKey="avgRate" 
@@ -378,9 +344,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
             </div>
           </div>
 
-          {/* Side Panel: Insights & Metrics (1/3 width) */}
           <div className="space-y-6">
-            {/* Quick Metrics Card */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
               <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-4">
                 Performance Metrics (Selection)
@@ -430,7 +394,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
               </div>
             </div>
 
-            {/* AI Insights Card */}
             <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl shadow-lg p-6 text-white relative overflow-hidden">
                <div className="absolute top-0 right-0 p-3 opacity-10">
                  <Sparkles className="w-24 h-24" />
@@ -472,7 +435,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
                  </div>
                )}
             </div>
-
           </div>
         </div>
       </main>

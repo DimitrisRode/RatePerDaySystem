@@ -303,7 +303,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ data, onReset }) => {
                       <Tooltip 
                         cursor={{ fill: '#f8fafc' }}
                         contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                        formatter={(value: number) => [`€${value.toFixed(2)}`, 'Avg Daily Rate']}
+                        formatter={(value?: number) => [`€${(value ?? 0).toFixed(2)}`, 'Avg Daily Rate']}
                       />
                       <Bar 
                         dataKey="avgRate" 
