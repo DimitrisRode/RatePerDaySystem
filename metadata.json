@@ -1,0 +1,5 @@
+{
+  "name": "Rental Analytics Dashboard",
+  "description": "A high-performance dashboard for analyzing rental station data from large Excel files, featuring automated average rate calculations and AI-driven insights.",
+  "requestFramePermissions": []
+}
