@@ -125,7 +125,12 @@ app.get('/api/config', requireAuth, async (req, res) => {
       return res.json({ years: {}, lastUpdated: new Date().toISOString() });
     }
     const [content] = await file.download();
-    res.json(JSON.parse(content.toString()));
+    try {
+      res.json(JSON.parse(content.toString()));
+    } catch (e) {
+      console.warn("Corrupt metadata.json found, returning empty config.");
+      res.json({ years: {}, lastUpdated: new Date().toISOString() });
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch config' });
@@ -146,10 +151,13 @@ app.post('/api/upload/init', requireAuth, async (req, res) => {
     const [exists] = await metaFile.exists();
     if (exists) {
       const [content] = await metaFile.download();
-      const meta = JSON.parse(content.toString());
-      // Assuming we store hash in metadata (we will start doing so)
-      if (meta.years && meta.years[year] && meta.years[year].hash === hash) {
-        return res.json({ status: 'exists' });
+      try {
+        const meta = JSON.parse(content.toString());
+        if (meta.years && meta.years[year] && meta.years[year].hash === hash) {
+          return res.json({ status: 'exists' });
+        }
+      } catch (e) {
+        console.warn("Failed to parse metadata during init check, proceeding with upload.");
       }
     }
 
@@ -175,10 +183,12 @@ app.post('/api/upload/init', requireAuth, async (req, res) => {
 // Finalize Upload
 app.post('/api/upload/finalize', requireAuth, async (req, res) => {
   const { year, type, hash } = req.body;
-  // (Input validation same as init)
+  
+  // Basic validation
+  if (!year || !hash) return res.status(400).json({ error: 'Missing parameters' });
 
   try {
-    // 1. Audit Log
+    // 1. Audit Log (Console only, to avoid GCS append issues)
     const auditEntry = {
       timestamp: new Date().toISOString(),
       action: 'finalize_upload',
@@ -186,7 +196,7 @@ app.post('/api/upload/finalize', requireAuth, async (req, res) => {
       hash,
       ip: req.ip
     };
-    await bucket.file(`logs/audit.jsonl`).save(JSON.stringify(auditEntry) + '\n', { resumable: false, append: true });
+    console.log('[AUDIT]', JSON.stringify(auditEntry));
 
     // 2. Optimistic Lock Metadata Update
     const metaFile = bucket.file('metadata.json');
@@ -201,7 +211,12 @@ app.post('/api/upload/finalize', requireAuth, async (req, res) => {
 
         if (exists) {
           const [content, metadata] = await metaFile.download();
-          meta = JSON.parse(content.toString());
+          try {
+            meta = JSON.parse(content.toString());
+          } catch (e) {
+            console.warn("Metadata file exists but is invalid JSON. Overwriting.");
+            meta = { years: {}, lastUpdated: '' };
+          }
           // Optimistic locking
           options.ifGenerationMatch = metadata.generation;
         } else {
@@ -215,18 +230,14 @@ app.post('/api/upload/finalize', requireAuth, async (req, res) => {
           status: 'active',
           version: (meta.years[year]?.version || 0) + 1,
           hash,
-          // In a real scenario we passed the path from Init, but here we can find it or reconstruct
-          // For simplicity, we assume we find the latest file with this hash or we just store metadata.
-          // In this strict implementation, we should pass the path from client or store it in temp state.
-          // To keep it stateless, we'll search or trust the pattern.
-          // We will rely on finding the file via prefix if needed, but for now just mark active.
         };
 
-        await metaFile.save(JSON.stringify(meta), options);
+        await metaFile.save(JSON.stringify(meta, null, 2), options);
         break; // Success
       } catch (e) {
         if (e.code === 412) { // Precondition Failed
           retries--;
+          console.log(`Metadata update collision (412), retrying... (${retries} left)`);
           continue;
         }
         throw e;
@@ -235,7 +246,7 @@ app.post('/api/upload/finalize', requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error(err);
+    console.error("Finalization Error:", err);
     res.status(500).json({ error: 'Finalization failed' });
   }
 });
@@ -245,15 +256,21 @@ app.get('/api/years/:year/records', requireAuth, async (req, res) => {
   const { year } = req.params;
   try {
     const metaFile = bucket.file('metadata.json');
+    const [exists] = await metaFile.exists();
+    if (!exists) return res.status(404).json({ error: 'Data not initialized' });
+
     const [content] = await metaFile.download();
-    const meta = JSON.parse(content.toString());
+    let meta;
+    try {
+      meta = JSON.parse(content.toString());
+    } catch (e) {
+      return res.status(500).json({ error: 'Metadata corruption' });
+    }
     
     if (!meta.years || !meta.years[year] || !meta.years[year].hash) {
       return res.status(404).json({ error: 'Data not found' });
     }
 
-    // Find the file. Since we didn't store exact path in metadata in this simplified example, 
-    // we assume we can list specific prefix or we should have stored it.
     // Improved Logic: We search for the file with the hash in the name.
     const [files] = await bucket.getFiles({ prefix: `data/${year}/` });
     const file = files.find(f => f.name.includes(meta.years[year].hash));
