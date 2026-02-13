@@ -304,10 +304,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <Tooltip 
                         cursor={{ fill: '#f8fafc' }}
                         contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                        formatter={(value: number | null, name: string) => [
-                          value ? `€${value.toFixed(2)}` : 'No Data', 
-                          name === 'primary' ? `${primaryYear} Rate` : `${comparisonYear} Rate`
-                        ]}
+                        formatter={(value: any, name: any) => {
+                          const num =
+                            typeof value === "number"
+                            ? value
+                            : value == null
+                            ? null
+                            : Number(value);
+
+                          const label =
+                            name === "primary"
+                            ? `${primaryYear} Rate`
+                            : `${comparisonYear} Rate`;
+
+                          return [
+                            num == null || Number.isNaN(num)
+                            ? "No Data"
+                            : `€${num.toFixed(2)}`,
+                            label,
+                          ];
+                        }}
+
                       />
                       <Legend />
                       <Bar name={`${primaryYear}`} dataKey="primary" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={isComparisonActive ? 20 : 40} />
