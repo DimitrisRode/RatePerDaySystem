@@ -210,7 +210,7 @@ app.post('/api/upload/finalize', requireAuth, async (req, res) => {
         let options = {};
 
         if (exists) {
-          const [content] = await metaFile.download();
+          const [content, metadata] = await metaFile.download();
           try {
             meta = JSON.parse(content.toString());
           } catch (e) {
@@ -218,8 +218,7 @@ app.post('/api/upload/finalize', requireAuth, async (req, res) => {
             meta = { years: {}, lastUpdated: '' };
           }
           // Optimistic locking
-          const [fileMeta] = await metaFile.getMetadata();
-          options.ifGenerationMatch = fileMeta.generation;
+          options.ifGenerationMatch = metadata.generation;
         } else {
           options.ifGenerationMatch = 0;
         }

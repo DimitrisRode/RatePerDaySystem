@@ -1,7 +1,9 @@
 export interface RentalRecord {
   id: number;
   station: string;
+  stationKey: string; // Normalized for comparison
   group: string;
+  groupKey: string;   // Normalized for comparison
   date: Date;
   monthKey: string; // YYYY-MM
   displayDate: string; // Month YYYY
@@ -10,6 +12,37 @@ export interface RentalRecord {
   charge: number;
   // For uniqueness across years
   year: number; 
+}
+
+export interface MetricSet {
+  revenue: number;
+  days: number;
+  count: number;
+  rate: number; // Calculated: revenue / days (if days > 0)
+  hasData: boolean; // True if records exist, False if future/empty
+}
+
+export interface VarianceSet {
+  revenue: number | null;
+  days: number | null;
+  rate: number | null;
+}
+
+export interface AlignedMonth {
+  monthIndex: number; // 0-11
+  monthName: string;  // "Jan", "Feb"...
+  primary: MetricSet;
+  comparison: MetricSet;
+  variance: VarianceSet;
+}
+
+export interface ComparisonResult {
+  alignedMonths: AlignedMonth[];
+  totals: {
+    primary: MetricSet;
+    comparison: MetricSet;
+    variance: VarianceSet;
+  };
 }
 
 export interface MonthlyAggregation {
@@ -30,6 +63,8 @@ export interface ProcessedData {
   year: number;
 }
 
+export type DatasetRegistry = Record<number, ProcessedData>;
+
 export interface YearMetadata {
   status: 'active' | 'pending' | 'missing';
   version: number;
@@ -37,6 +72,7 @@ export interface YearMetadata {
   lastUpdated?: string;
   recordsPath?: string;
   statsPath?: string;
+  hash?: string;
 }
 
 export interface AppMetadata {

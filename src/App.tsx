@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { Dashboard } from './components/Dashboard';
-import { ProcessedData, UploadStatus, AppMetadata } from './types';
+import { ProcessedData, UploadStatus, AppMetadata, DatasetRegistry } from './types';
 import { parseExcelFile } from './utils/excelProcessor';
 import { api } from './services/api';
-import { Lock, LogOut, Cloud, CheckCircle, Database, AlertCircle, Loader2 } from 'lucide-react';
+import { Lock, LogOut, Cloud, Database, AlertCircle, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -17,11 +17,15 @@ const App: React.FC = () => {
 
   const [metadata, setMetadata] = useState<AppMetadata | null>(null);
   
-  // Data State
-  const [historicalData, setHistoricalData] = useState<ProcessedData[]>([]);
-  const [localData, setLocalData] = useState<ProcessedData | null>(null);
+  // --- New Architecture State ---
+  const [datasetRegistry, setDatasetRegistry] = useState<DatasetRegistry>({});
+  const [primaryYear, setPrimaryYear] = useState<number | null>(null);
+  const [comparisonYear, setComparisonYear] = useState<number | 'none'>('none');
+  
+  // Loading & In-flight tracking
+  const [loadingYears, setLoadingYears] = useState<Set<number>>(new Set());
+  const inflightRequests = useRef<Map<number, Promise<void>>>(new Map());
   const [uploadStatus, setUploadStatus] = useState<Record<string, UploadStatus>>({});
-  const [loadingYears, setLoadingYears] = useState<string[]>([]);
 
   // Init
   useEffect(() => {
@@ -40,17 +44,13 @@ const App: React.FC = () => {
     e.preventDefault();
     setLoginError('');
     setIsLoggingIn(true);
-
     try {
       const success = await api.login(password);
-      if (success) {
-        await checkAuth();
-      } else {
-        setLoginError('Invalid Password');
-      }
+      if (success) await checkAuth();
+      else setLoginError('Invalid Password');
     } catch (err) {
       console.error(err);
-      setLoginError('Connection error. Please check server logs.');
+      setLoginError('Connection error.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -59,39 +59,95 @@ const App: React.FC = () => {
   const handleLogout = async () => {
     await api.logout();
     setIsAuthenticated(false);
-    setHistoricalData([]);
-    setLocalData(null);
+    setDatasetRegistry({});
+    setPrimaryYear(null);
+    setComparisonYear('none');
   };
 
-  const loadHistoricalYear = async (year: string) => {
-    setLoadingYears(prev => [...prev, year]);
-    try {
-      const data = await api.fetchYearData(year);
-      setHistoricalData(prev => [...prev.filter(d => d.year !== parseInt(year)), data]);
-    } catch (e) {
-      console.error(e);
-      alert(`Failed to load ${year} data`);
-    } finally {
-      setLoadingYears(prev => prev.filter(y => y !== year));
+  // --- Core Loading Logic ---
+
+  const verifyYearMode = (data: ProcessedData, requestedYear: number): boolean => {
+    const counts: Record<number, number> = {};
+    let valid = 0;
+    data.records.forEach(r => {
+      if (r.date && !isNaN(r.date.getTime())) {
+        const y = r.date.getFullYear();
+        counts[y] = (counts[y] || 0) + 1;
+        valid++;
+      }
+    });
+
+    if (valid < 10) {
+      console.warn("Insufficient data to verify year mode. Assuming correct.");
+      return true;
     }
+
+    const modeYear = parseInt(Object.entries(counts).reduce((a, b) => b[1] > a[1] ? b : a)[0]);
+    if (modeYear !== requestedYear) {
+      console.warn(`Year Mismatch: Requested ${requestedYear}, Found Mode ${modeYear}`);
+      return false;
+    }
+    return true;
   };
 
-  // Local Upload (2026)
+  const loadYear = async (year: number): Promise<void> => {
+    // 1. Cache Check
+    if (datasetRegistry[year]) return;
+
+    // 2. In-flight Deduplication
+    if (inflightRequests.current.has(year)) {
+      return inflightRequests.current.get(year);
+    }
+
+    // 3. Create Promise
+    const promise = (async () => {
+      setLoadingYears(prev => new Set(prev).add(year));
+      try {
+        const data = await api.fetchYearData(String(year));
+        
+        if (!verifyYearMode(data, year)) {
+           alert(`Warning: The data for ${year} appears to contain mostly records from another year.`);
+        }
+
+        setDatasetRegistry(prev => ({ ...prev, [year]: data }));
+      } catch (e) {
+        console.error(`Failed to load ${year}`, e);
+        alert(`Failed to download data for ${year}`);
+      } finally {
+        setLoadingYears(prev => {
+          const next = new Set(prev);
+          next.delete(year);
+          return next;
+        });
+        inflightRequests.current.delete(year);
+      }
+    })();
+
+    inflightRequests.current.set(year, promise);
+    return promise;
+  };
+
+  // --- Upload Logic ---
+
   const handleLocalFileUpload = async (file: File) => {
     setUploadStatus(prev => ({ ...prev, local: 'parsing' }));
     try {
       const { data, hash } = await parseExcelFile(file);
       
-      // If user wants to save this as a historical year (e.g. 2024 upload)
-      // Check year of data
-      if ([2023, 2024, 2025].includes(data.year)) {
-        if (confirm(`This file contains data for ${data.year}. Do you want to upload it to the secure cloud?`)) {
-           await handleCloudUpload(data.year, data.records, hash);
-           return;
-        }
+      // Update Registry directly with local file
+      setDatasetRegistry(prev => ({ ...prev, [data.year]: data }));
+      
+      // Auto-select if no primary is set
+      if (!primaryYear) {
+        setPrimaryYear(data.year);
       }
 
-      setLocalData(data);
+      // Prompt for Cloud Upload if historical
+      if ([2023, 2024, 2025].includes(data.year)) {
+        if (confirm(`Detected ${data.year} data. Upload to cloud for permanent storage?`)) {
+           await handleCloudUpload(data.year, data.records, hash);
+        }
+      }
       setUploadStatus(prev => ({ ...prev, local: 'success' }));
     } catch (e) {
       console.error(e);
@@ -105,42 +161,27 @@ const App: React.FC = () => {
     try {
       await api.uploadDataset(year, records, hash, (msg) => console.log(msg));
       setUploadStatus(prev => ({ ...prev, [key]: 'success' }));
-      // Refresh metadata
       const res = await api.checkAuth();
       if (res.metadata) setMetadata(res.metadata);
     } catch (e) {
       console.error(e);
       setUploadStatus(prev => ({ ...prev, [key]: 'error' }));
-      alert('Upload failed. See console.');
+      alert('Upload failed.');
     }
   };
 
-  // Merge Datasets
-  const mergedData = useMemo(() => {
-    const all = [...historicalData];
-    if (localData) all.push(localData);
-    if (all.length === 0) return null;
+  const availableYears = React.useMemo(() => {
+    const years = new Set<number>();
+    // From Metadata
+    if (metadata?.years) {
+      Object.keys(metadata.years).forEach(y => years.add(parseInt(y)));
+    }
+    // From Registry (Local uploads)
+    Object.keys(datasetRegistry).forEach(y => years.add(parseInt(y)));
+    return Array.from(years).sort((a, b) => b - a); // Descending
+  }, [metadata, datasetRegistry]);
 
-    // Merge logic
-    const records = all.flatMap(d => d.records);
-    // Re-sort and dedup auxiliary arrays
-    const stations = Array.from(new Set(all.flatMap(d => d.stations))).sort();
-    const groups = Array.from(new Set(all.flatMap(d => d.groups))).sort();
-    const months = Array.from(new Set(all.flatMap(d => d.months))).sort();
-    
-    // Sort months strictly by date
-    months.sort((a, b) => a.localeCompare(b));
-
-    return {
-      records,
-      stations,
-      groups,
-      months,
-      totalRecords: records.length,
-      year: 0 // Mixed
-    };
-  }, [historicalData, localData]);
-
+  // --- Renders ---
 
   if (isLoadingAuth) {
     return <div className="h-screen flex items-center justify-center bg-slate-100 text-slate-500">Loading...</div>;
@@ -151,50 +192,29 @@ const App: React.FC = () => {
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
         <form onSubmit={handleLogin} className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md space-y-6">
           <div className="text-center">
-            <div className="bg-blue-100 p-3 rounded-full w-fit mx-auto mb-4">
-              <Lock className="w-8 h-8 text-blue-600" />
-            </div>
+            <div className="bg-blue-100 p-3 rounded-full w-fit mx-auto mb-4"><Lock className="w-8 h-8 text-blue-600" /></div>
             <h1 className="text-2xl font-bold text-slate-800">Secure Dashboard Access</h1>
-            <p className="text-slate-500 text-sm mt-2">Enter the administrator password to access the data vault.</p>
           </div>
           <div className="space-y-2">
-            <input 
-              type="password" 
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              placeholder="Admin Password"
-              disabled={isLoggingIn}
-            />
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Password" disabled={isLoggingIn} />
             {loginError && <p className="text-red-500 text-sm flex items-center gap-1"><AlertCircle className="w-4 h-4" /> {loginError}</p>}
           </div>
-          <button 
-            type="submit" 
-            disabled={isLoggingIn}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold py-3 rounded-lg transition-colors flex items-center justify-center gap-2"
-          >
-            {isLoggingIn ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Accessing...
-              </>
-            ) : (
-              'Access Dashboard'
-            )}
+          <button type="submit" disabled={isLoggingIn} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2">
+            {isLoggingIn ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Access Dashboard'}
           </button>
         </form>
       </div>
     );
   }
 
-  // Data Manager View
-  if (!mergedData) {
+  // If no primary year is selected, show the Management Console
+  if (!primaryYear) {
     return (
       <div className="min-h-screen bg-slate-50 p-8">
         <header className="flex justify-between items-center mb-8 max-w-5xl mx-auto">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Data Management Console</h1>
-            <p className="text-slate-500">Manage historical datasets and import new data.</p>
+            <p className="text-slate-500">Select a dataset to view or upload new data.</p>
           </div>
           <button onClick={handleLogout} className="flex items-center gap-2 text-slate-600 hover:text-red-600 transition-colors">
             <LogOut className="w-5 h-5" /> Logout
@@ -202,61 +222,45 @@ const App: React.FC = () => {
         </header>
 
         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
-          
-          {/* Cloud Storage Status */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-6">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Cloud className="w-5 h-5 text-blue-500" />
-              Cloud Data Vault (2023-2025)
-            </h2>
+            <h2 className="text-lg font-semibold flex items-center gap-2"><Cloud className="w-5 h-5 text-blue-500" /> Cloud Datasets</h2>
             <div className="space-y-4">
-              {['2023', '2024', '2025'].map(year => {
-                const meta = metadata?.years?.[year];
-                const isLoaded = historicalData.some(d => d.year === parseInt(year));
-                const isLoading = loadingYears.includes(year);
+              {['2023', '2024', '2025'].map(yearStr => {
+                const year = parseInt(yearStr);
+                const meta = metadata?.years?.[yearStr];
+                const isLoaded = !!datasetRegistry[year];
+                const isLoading = loadingYears.has(year);
                 
                 return (
                   <div key={year} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
                     <div className="flex items-center gap-3">
                       <div className={`w-3 h-3 rounded-full ${meta?.status === 'active' ? 'bg-green-500' : 'bg-slate-300'}`} />
                       <span className="font-medium text-slate-700">{year} Dataset</span>
-                      {meta?.status === 'active' && <span className="text-xs text-slate-400">v{meta.version}</span>}
                     </div>
                     {meta?.status === 'active' ? (
                       <button 
-                        onClick={() => loadHistoricalYear(year)}
-                        disabled={isLoaded || isLoading}
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all
-                          ${isLoaded 
-                            ? 'bg-green-100 text-green-700 cursor-default' 
-                            : 'bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-600 shadow-sm'}
-                        `}
+                        onClick={async () => {
+                          if (!isLoaded) await loadYear(year);
+                          setPrimaryYear(year);
+                        }}
+                        disabled={isLoading}
+                        className="px-4 py-2 rounded-lg text-sm font-medium bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-600 shadow-sm transition-all"
                       >
-                        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : isLoaded ? 'Loaded' : 'Load Data'}
+                        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : (isLoaded ? 'Open' : 'Load & Open')}
                       </button>
-                    ) : (
-                      <span className="text-xs text-slate-400 italic">No Data</span>
-                    )}
+                    ) : <span className="text-xs text-slate-400 italic">No Data</span>}
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Local Import */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
-             <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
-              <Database className="w-5 h-5 text-purple-500" />
-              Current Data Import (2026)
-            </h2>
-            <div className="flex-1">
-              <FileUpload 
-                onFileUpload={handleLocalFileUpload} 
-                status={uploadStatus['local'] || 'idle'} 
-              />
-            </div>
+             <h2 className="text-lg font-semibold flex items-center gap-2 mb-4"><Database className="w-5 h-5 text-purple-500" /> Import New Data</h2>
+             <div className="flex-1">
+               <FileUpload onFileUpload={handleLocalFileUpload} status={uploadStatus['local'] || 'idle'} />
+             </div>
           </div>
-
         </div>
       </div>
     );
@@ -264,10 +268,17 @@ const App: React.FC = () => {
 
   return (
     <Dashboard 
-      data={mergedData} 
+      registry={datasetRegistry}
+      primaryYear={primaryYear}
+      comparisonYear={comparisonYear}
+      availableYears={availableYears}
+      loadingYears={loadingYears}
+      onSetPrimaryYear={setPrimaryYear}
+      onSetComparisonYear={setComparisonYear}
+      onLoadYear={loadYear}
       onReset={() => {
-        setLocalData(null);
-        setHistoricalData([]);
+        setPrimaryYear(null);
+        setComparisonYear('none');
       }} 
     />
   );

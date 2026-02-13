@@ -1,4 +1,4 @@
-import { AppMetadata, ProcessedData } from "../types";
+import { AppMetadata, ProcessedData, RentalRecord } from "../types";
 
 // Helper to get CSRF token from cookie
 const getCsrfToken = () => {
@@ -121,18 +121,19 @@ export const api = {
     const records = await dataRes.json();
     
     // 3. Reconstruct ProcessedData (lightweight calc)
-    // Note: In a real optimized app, we would fetch stats.json separately.
-    // Here we reconstruct minimal ProcessedData to fit existing types.
-    const recordsWithDates = records.map((r: any) => ({
+    // IMPORTANT: Polyfill stationKey/groupKey for older datasets that might lack them
+    const recordsWithDates: RentalRecord[] = records.map((r: any) => ({
       ...r,
-      date: new Date(r.date)
+      date: new Date(r.date),
+      stationKey: r.stationKey || (r.station ? r.station.toLowerCase().trim() : ''),
+      groupKey: r.groupKey || (r.group ? r.group.toLowerCase().trim() : '')
     }));
 
     return {
       records: recordsWithDates,
-      stations: Array.from(new Set(recordsWithDates.map((r: any) => r.station))).sort() as string[],
-      groups: Array.from(new Set(recordsWithDates.map((r: any) => r.group))).sort() as string[],
-      months: Array.from(new Set(recordsWithDates.map((r: any) => r.monthKey))).sort() as string[],
+      stations: Array.from(new Set(recordsWithDates.map((r) => r.station))).sort(),
+      groups: Array.from(new Set(recordsWithDates.map((r) => r.group))).sort(),
+      months: Array.from(new Set(recordsWithDates.map((r) => r.monthKey))).sort(),
       totalRecords: recordsWithDates.length,
       year: parseInt(year)
     };

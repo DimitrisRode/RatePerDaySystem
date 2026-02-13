@@ -125,7 +125,9 @@ const processRawData = (data: any[]): ProcessedData => {
     records.push({
       id: index,
       station,
+      stationKey: station.toLowerCase().trim(),
       group,
+      groupKey: group.toLowerCase().trim(),
       date,
       monthKey,
       displayDate,
